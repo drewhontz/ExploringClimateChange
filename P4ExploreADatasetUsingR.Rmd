@@ -1,0 +1,424 @@
+# Exploring & Summarizing US Climate Change
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# Loading the packages I will be using during this project
+# ggplot2 will be used for plots, gridExtra will help arrange multiple plots on
+# the same grid. Dplyr will be used to help group data. Maps is used to draw
+# the US map.
+
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(maps)
+```
+
+# Loading our Data
+
+First thing is first, we need to load the data that is currently stored in 'GlobalLandTemperaturesByCity.csv'.
+After the data is loaded, we will subset it to include only those data points that have 'United States' as their county name.
+```{r echo=TRUE, Load_the_Data}
+# Loading our data from file, then subsetting it so we only have US data.
+setwd("C:/Users/Drew/Desktop/Code/DAND/EDA")
+data <- read.csv("GlobalLandTemperaturesByCity.csv")
+us_data <- subset(data, Country == "United States")
+```
+
+# Univariate Plots Section
+
+To start off the Univariate Plot sections we need to make some alterations to our variables. These changes will include:
+* Adding a field for lower and upper bounds of the confidence interval surrounding AverageTemperature
+* Splitting our dt field into month, day, and year
+* Removing the cardinal direction from our Latitude and Longitude fields and storing the result in 2 new fields 'lat' and 'long'
+* Cutting the data on month to add a season field.
+
+Once we have made these changes I will want to get an idea of when these recordings were made to see if I need to subset the data any further. For instance, it is my assumption that our data may not have as many entries in it's earlier years as it does throughout the 20th century.
+
+```{r echo=TRUE, warning=FALSE, Univariate_Plots} 
+
+# Creating upper and lower bound lines by adding/subtracting uncertainty
+us_data$lower <- us_data$AverageTemperature - 
+  us_data$AverageTemperatureUncertainty 
+us_data$upper <- us_data$AverageTemperature + 
+  us_data$AverageTemperatureUncertainty
+
+# Breaking dt into month, year, and date
+us_data$month <- substr(us_data$dt, 6, 7) 
+us_data$year <- substr(us_data$dt, 1, 4) 
+us_data$day <- substr(us_data$dt, 9, 10)
+
+# Removing the cardinal direction from our Latitude and Longitude fields
+us_data$long <- 
+  as.numeric(substr(us_data$Longitude, 1,
+                    nchar(as.character(us_data$Longitude)) - 1)) * (-1) 
+us_data$lat <- 
+  as.numeric(substr(us_data$Latitude, 1, 
+                    nchar(as.character(us_data$Latitude)) - 1))
+
+# Setting our month field to numeric and creating seasonality
+us_data$month <-as.numeric(us_data$month) 
+us_data$season <- cut(x = us_data$month, breaks = c(0, 3, 6, 9, 12), 
+                      labels = c("Winter", "Spring", "Summer", "Autumn"))
+
+p1 <- ggplot(data = subset(us_data, !is.na(AverageTemperature)), 
+             aes(x = year)) + 
+  geom_histogram(stat = 'count') + 
+  ggtitle("Avg Temp Recordings by Year")
+
+p2 <- ggplot(data = subset(us_data, !is.na(AverageTemperature)), 
+             aes(x = month)) + 
+  geom_histogram(stat = 'count') + 
+  coord_cartesian(ylim = c(54500, 56000)) + 
+  ggtitle("Avg Temp Recordings by Month")
+
+p3 <- ggplot(data = subset(us_data, !is.na(AverageTemperature)), 
+             aes(x = day)) + 
+  geom_histogram(stat = 'count') + 
+  ggtitle("Avg Temp Recordings by Day")
+
+p4 <- ggplot(data = subset(us_data, !is.na(AverageTemperature)), 
+             aes(x = AverageTemperatureUncertainty)) + 
+  geom_histogram(stat = 'count') + 
+  xlim(0.0, 4.0) + 
+  ggtitle("Avg Temp Uncertainty")
+
+grid.arrange(p1, p2, p3, p4)
+
+```
+# Univariate Analysis
+
+### What is the structure of your dataset?
+687,289 Rows of data across 7 variables.
+The following are our columns.
+
+* Datetime (of average temperature recording in format YYYY-MM-DD)
+* AverageTemperature (in Celsius) : num
+* AverageTemperatureUncertainty (describes the 95% confidence interval around the avg. temp): num
+* City : Factor
+* Country : Factor
+* Latitude : Factor
+* Longitude : Factor
+
+### Potential Changes to data structure
+As noted above, here are the changes I made to our data
+
+* Omit Country (since it will always be United States in this case)
+* Break dt into seperate day, month, and year
+* Create new lat, long columns without trailing cardinal direction
+* Add upper and lower avg temperature based off average uncertainty
+* Add seasons column
+
+### What is/are the main feature(s) of interest in your dataset?
+The main feature is AverageTemperature, I will be interested in investigating how much this has risen over time in various cities/regions.
+
+### What other features in the dataset do you think will help support your investigation into your feature(s) of interest?
+AverageUncertainty, after glancing at the data is looks as though there will be a strong relationship between AverageUncertainty and our dt variable to accomodate for technological advancement in temperature measurement instrumentation in the last 200 years.
+
+### Did you create any new variables from existing variables in the dataset?
+As mentioned in the 'Potential Changes' section, I broke dt out into Month and Year as well as made Lat and Lon numerical and ommitted the cardinal direction for plotting purposes. Season has also been added based on the newly created month field.
+
+### Of the features you investigated, were there any unusual distributions? Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+* All temperature recordings are from the first of the month
+* There seems to be a right skew in our AverageTemperatureUncertainty; I plan to investigate this in our next section as I think it likely accounts for more accurate measurements being taken as time progresses.
+* The month of April has the fewest recordings of average temperature.
+* Temperature recordings are a lot more frequent after 1850.
+
+# Bivariate Plots Section
+
+The main relationship I want to investigate is change in AverageTemperature over time so I will need to use the dplyr package to group my data. I created the 'data_grouped_years' variable to group our data by year, and find the mean temperature and uncertainty across all cities that year.
+
+```{r echo=TRUE, warning=FALSE, Bivariate_Plots}
+
+# Grouping data by year and adding mean avg_temp and avg_uncertainty
+data_grouped_years <- group_by(us_data, year) %>%
+  summarise(avg_temp = mean(AverageTemperature),
+            avg_uncertainty = mean(AverageTemperatureUncertainty),
+            lower = mean(lower),
+            upper = mean(upper)) %>%
+ subset(!is.na(avg_temp) & year >= 1850)
+
+data_grouped_years$year <- as.numeric(data_grouped_years$year)
+  
+us_map <- map_data("state")
+
+avg_temp_over_time <- 
+  ggplot(data = data_grouped_years, aes(x = year, y = avg_temp, group = 1)) +
+  geom_line() +
+  ggtitle("Average Temperature over Years ")
+
+avg_temp_over_time_uncertain <- 
+  ggplot(data = data_grouped_years, aes(x = year, y = avg_temp, group = 1)) +
+  geom_line() +
+  geom_line(aes(y = lower), linetype = 2, color="red") +
+  geom_line(aes(y = upper), linetype = 2, color="green") +
+  ggtitle("Average Temperature over Years (with Uncertainty interval)")
+
+avg_uncertainty_over_time <- 
+  ggplot(data = data_grouped_years, 
+         aes(x = year, y = avg_uncertainty, group = 1)) +
+  geom_line() +
+  ggtitle("Average Uncertainty over Years ")
+
+cities_in_us_data <- ggplot() +
+  geom_polygon(data = us_map, aes(x = long, y = lat, group = group), 
+               color = "white", fill= "grey10") +
+  geom_point(data = us_data, 
+             aes(x = long, y = lat, color = AverageTemperature)) +
+  scale_color_gradient2(low = 'white', high = 'red') +
+  coord_cartesian(xlim = c(-125, -70), ylim = c(25, 50)) +
+  ggtitle("Cities in the US Dataset")
+
+grid.arrange(avg_temp_over_time, avg_temp_over_time_uncertain, 
+             avg_uncertainty_over_time, cities_in_us_data)
+
+```
+
+Now that we have seen our data grouped by year, I thought I would make use of our seasons column to show how much average temperature has risen by season.
+
+```{r, echo=TRUE, Data_Grouped_by_Seasonality}
+
+data_grouped_seasons <- group_by(us_data, year, season) %>%
+  summarise(avg_temp = mean(AverageTemperature)) %>%
+ subset(!is.na(avg_temp) & year >= 1850)
+
+ggplot(data = data_grouped_seasons, 
+       aes(x = year, y = avg_temp, group = season)) +
+         geom_line(aes(color = season)) +
+         geom_smooth() +
+         facet_wrap(~season, scales = "free_y")
+```
+
+These next plots have nothing to do with change in average temperature over time but I thought it might be interesting to depict average temperature by season across the US to show how little fluctuation there is in temperature over the course of a year in regions like the South and Southwest.
+
+```{r echo=TRUE, warning=FALSE, Data_Grouped_by_City}
+data_grouped_city <- group_by(subset(us_data, year >= 1850), City, season) %>%
+  summarise(avg_temp = mean(AverageTemperature),
+            lat = mean(lat),
+            long = mean(long))
+
+ggplot() +
+  geom_polygon(data = us_map, aes(x = long, y = lat, group = group), 
+               color = "white", fill= "grey10") +
+  geom_point(data = data_grouped_city, 
+             aes(x = long, y = lat, color = avg_temp)) +
+  scale_color_gradient2(low = 'blue', high = 'red') +
+  facet_wrap(~season) +
+  coord_cartesian(xlim = c(-125, -70), ylim = c(25, 50)) +
+  ggtitle("Cities in the US Dataset")
+```
+
+Now for the final set of plots in the Bivariate section, I had to think of how to display that average temperature is in fact rising over time.
+
+In order to accomplish this I needed a baseline and a current average to show the change/increase in temperature. I decided arbitrarily that a decade would be a good enough average and originally selected to group the data by average temperature in each city from the period of 1850-1860 and compare that with the same data from 2003-2013 (the dataset's most recent data). 
+
+When looking at the difference between the averages in 1850s and the 2003-2013 period, I realized that the average uncertainty could explain the increased temperature, so I decided that I needed to choose a more recent decade to show that the uncertainty was attributed to global warming as opposed to inconsistent measuring techniques. 
+
+I looked back at our Univariate section and decided that the 1963-1973 period had an uncertainty of about +- 0.30 degrees (which is very similar to what our uncertainty is today) and decided that this would be the period I would use as a baseline.
+
+As you will see below, I created 2 variables to hold our 1960s and 2000s average temp and uncertainty and then I performed and inner join and calculated the percent change between the two averages in the percent_change field of the pct_change variable.
+
+```{r, echo=TRUE, Data_Grouped_by_Decades}
+
+# Creating 2 data sets with average temperature for 1963 -> 1973 and 2003 -> 2013
+pct_1960s <- group_by(subset(us_data, year >= 1963 & year <= 1973), City) %>%
+    summarise(avg_change = mean(AverageTemperature),
+              avg_uncertainty = mean(AverageTemperatureUncertainty),
+            lat = mean(lat),
+            long = mean(long))
+
+pct_2000s <- group_by(subset(us_data, year >= 2003 & year <= 2013), City) %>%
+    summarise(avg_change = mean(AverageTemperature),
+              avg_uncertainty = mean(AverageTemperatureUncertainty),
+            lat = mean(lat),
+            long = mean(long))
+
+colnames(pct_1960s)[2] <- "Average Temperature 1963-1973"
+colnames(pct_1960s)[3] <- "Average Temperature Uncertainty 1963-1973"
+
+colnames(pct_2000s)[2] <- "Average Temperature 2003-2013"
+colnames(pct_2000s)[3] <- "Average Temperature Uncertainty 2003-2013"
+
+
+# Merging our 2 new data sets through inner join
+pct_change <- merge(pct_1960s, pct_2000s)
+pct_change$percent_change <- 
+  (pct_change$`Average Temperature 2003-2013` - 
+     pct_change$`Average Temperature 1963-1973`)/
+  pct_change$`Average Temperature 1963-1973` * 100
+
+ggplot() +
+  geom_polygon(data = us_map, aes(x = long, y = lat, group = group), 
+               color = "white", fill= "grey10") +
+  geom_point(data = pct_change, 
+             aes(x = long, y = lat, color = percent_change)) +
+  scale_color_gradient2(low = 'green', high = 'red') +
+  coord_cartesian(xlim = c(-125, -70), ylim = c(25, 50)) +
+  ggtitle("Cities in the US Dataset")
+
+```
+```{r echo=TRUE, warning=FALSE, Cities_in_the_Great_Lakes_Region}
+
+# Subsetting our data to show only Great Lakes region data
+great_lakes <- c('wisconsin', 'illinois', 'michigan', 'indiana', 'ohio', 
+                 'minnesota', 'iowa', 'missouri')
+
+ggplot() +
+  geom_polygon(data = subset(us_map, region %in% great_lakes), 
+               aes(x = long, y = lat, group = group), 
+               color = "white", fill= "grey10") +
+  geom_point(data = pct_change, 
+             aes(x = long, y = lat, color = percent_change)) +
+  scale_color_gradient2(low = 'green', high = 'red') +
+  coord_cartesian(xlim = c(-97, -80), ylim = c(36, 50)) +
+  ggtitle("Cities in the US Midwest")
+```
+
+We can see that the Midwest seems to be impacted the most by global warming so now lets go back to our univariate analysis and see how percent_change is distributed across our newly grouped data in pct_change.
+
+```{r echo=TRUE, warning=FALSE, Average_Percentage_Increase_Distributions}
+
+ggplot(data = pct_change, aes(x = percent_change)) +
+  geom_histogram() +
+  scale_x_continuous(breaks = seq(0, 45, 2.5)) +
+  ggtitle("Average Percentage Increase in Average Temperature")
+```
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. How did the feature(s) of interest vary with other features in the dataset?
+
+* It seems that any way you cut time, AverageTemperature will increase. I cut our dt into day, month, year and further cut month to season. When I plotted year vs Average temperature, you could see that temperature had gradually increased since the first record (for our purposes here we are starting with year 1850).
+* I also wanted to look for areas of the US that might be more impacted by global warming than others. In order to capture this I took a 10yr average temperature from 1850-1860 and compared it to average temperature in each city from 2003-2013. I then computed the percentage change and plotted it on the US Map. It looks as though the Denver area has seen the largest percent change in temperature between these two decades, but the Great Lakes region looks as though it was the region most affected.
+
+### Did you observe any interesting relationships between the other features (not the main feature(s) of interest)?
+
+Our feature AverageUncertainty fell sharply from the first record and continued to fall until leveling off around +- 0.30 of one degree Celsius in 1968.
+
+### What was the strongest relationship you found?
+
+When I grouped our data by year and summarized our temperature and uncertainty data by their averages, I found that AverageUncertainty and year had a correlation of -0.812. This was definitely the strongest relationship I have found yet.
+
+Our main feature, AverageTemperature, and year had a correlation of 0.696.
+
+# Multivariate Plots Section
+
+```{r echo=FALSE, Multivariate_Plots}
+ggplot(data = data_grouped_years, aes(x = year, y = (avg_temp/avg_uncertainty), group = 1)) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(1850, 2013, 10))
+```
+
+```{r echo=TRUE, warning=FALSE, Upper_bound_Lower_boud_Ratio}
+ggplot(data = data_grouped_years, aes(x = year, y = (upper/lower), group = 1)) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(1850, 2013, 10)) +
+  ggtitle("Proportion of Upper bound:Lower bound in AvgTemp Uncertainty")
+```
+
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. Were there features that strengthened each other in terms of looking at your feature(s) of interest?
+There was not much to work with here in terms of looking at ratio's that exist between our variables. We can observe that the spread between the upper and lower bounds closed as our uncertainty dropped and as uncertainty dropped. Average uncertainty also became significantly less impactful in our average temperature as depicted by the sharp rise in avg_temp/avg_uncertainty.
+
+### Were there any interesting or surprising interactions between features?
+In the 'Proportion of Upper to Lower Bound Uncertainty' plot you can clearly see the shrinking AverageUncertainty over time as the upper and lower bounds sharply converged between 1850-> 1900.
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, Plot_One}
+data_grouped_years$year <- as.numeric(data_grouped_years$year)
+
+ggplot(data = data_grouped_years, aes(x = year, y = avg_temp, group = 1)) +
+  geom_line() +
+  geom_smooth() +
+  geom_line(aes(y = lower), linetype = 2, color="red") +
+  geom_line(aes(y = upper), linetype = 2, color="green") +
+  ggtitle("Average Temperature in US Cities from 1850 -> 2013 (with Uncertainty interval)") +
+  scale_x_continuous(breaks = seq(1850, 2013, 10)) +
+  ylab("Average Temperature in Celsius") +
+  xlab("Year")
+```
+
+## Description One
+
+I grouped our data by year and summarized the average temperatures and uncertainties, then plotted this as year vs. average temperature to show that temperature has been steadily increasing across all of the US since 1850.
+
+Bounding this black center line and our smoother are two other line graphs, the green representing the upper limit to the convidence interval (average temperature + average uncertainty) and the red representing the lower limit to the convidence interval (average temperature - average uncertainty).
+
+You can see the sharp decrease in the width of the uncertainty confidence interval as time progresses. This change can be explained by the transition away from mecury based thermometers. 
+
+Overall, it is apparant that average temperature in US cities has gradually risen between the period of 1850->2013 by roughly 1.25 degrees Celsius (from 14 in 1850 -> 15.25 in 2013).
+
+## Plot Two
+```{r echo=FALSE, Plot_Two} 
+
+data_grouped_seasons$year <- as.numeric(data_grouped_seasons$year)
+
+ggplot(data = data_grouped_seasons, 
+       aes(x = year, y = avg_temp, group = season)) + 
+  geom_line(aes(color = season)) + 
+  geom_smooth() + 
+  scale_x_continuous(breaks = seq(1850, 2013, 30)) + 
+  xlab("Year") + 
+  ylab("Average Temperature in Celcius") + 
+  ggtitle("Average Temperature in US Cities from 1850-2013 by Season") + 
+  facet_wrap(~season, scales = "free_y")
+
+```
+
+### Description Two
+Similar to the previous plot, I thought I would provide a better view into our increasing average temperatures by further cutting our data by season. Here we can see that each season has been experiencing a gradual increase in temperature.
+
+One interesting thing to note is that Spring and Summer averages seemed to have a slight dip from 1880->1910 before steadily increasing again.
+
+Summer seems to have seen the least amount of change over time (from 23.0 -> 23.7) while Winter and Autumn have each seen about 1.5 degree increases in average temperature.
+
+### Plot Three
+```{r echo=FALSE, Plot_Three}
+ggplot() +
+  geom_polygon(data = us_map, aes(x = long, y = lat, group = group), 
+  color = "white", fill= "grey10") +
+  geom_point(data = pct_change, 
+  aes(x = long, y = lat, color = percent_change)) +
+  scale_color_gradient2(low = 'green', high = 'red') +
+  coord_cartesian(xlim = c(-125, -70), ylim = c(25, 50)) +
+  xlab("Longitude") +
+  ylab("Latitude") +
+  ggtitle("Percent Increase in Temperature (1963-1973) vs (2003-2013)")
+````
+
+## Description Three
+
+I wanted to get some insight on which US cities were impacted the most by global warming so I found the average temperature in each city from 1963-1973 and computed the percent change between this average and the average temperature across 2000-2013 in each city.
+
+The first time around I used the periods 1850-1860 vs 2003-2013 but I felt that the average uncertainty could explain for the temperature increase so I had better use a more recent decade where the uncertainty was less of a factor.
+
+We can see that aside from a drastic increase in the Denver, CO area, the Great Lakes region is undergoing the largest percentage increase in average temperature over the two periods we investigated.
+
+Overall, I computed that the average percent increase in average temperature across US cities between our two decades here and found that the average temperature increase across the US was 7.547%
+
+> p <- subset(pct_change, !is.na(percent_change))
+
+> mean(p$percent_change)
+
+> [1] 7.547014
+
+--------------------------------------------------------------------------------
+
+# Reflection
+
+Where did I run into difficulties in the analysis?
+The most difficult aspect of this analysis was deciding on a methodology for how to show the increasing average temperature across all US cities. I briefly considered computing percent change year-to-year between each month for each city, then finding the average change (as opposed to comparing 2 decade averages) but I decided that average uncertainty would impact these findings too much so I settled with comparing 2 distinct decades.
+
+Additionally, I struggled to find meaningful ways to show multivariate relationships. This may have been due to a lack of features but I experimented nonetheless.
+
+Where did I find successes?
+I found success in being able to group data by the features I was interested in and easily plot/display the relationships I set out to visualize (increase in Average temperature over time, decrease in uncertainty over time).
+
+How could the analysis be enriched in future work (e.g. additional data and analyses)?
+One plot I considered but did not create was a violin plot of percentage change by region. I think it would be a cool idea to break each of these cities up by 'Pacific Northwest', 'Midwest', 'Mid Atlantic', etc and show the distribution of percentage increase in avg. temperature to have a much better view of the impact of global warming on each region. While still possible this is a much larger undertaking as our city data does not have the state it belongs in; in order to determine if our 'Springfield' data belongs in 'Midwest' or 'Mid Atlantic' we would need to use it's lat, long data to classify (sounds like a machine learning problem for later :) ).
+
+In addition to the percent increase by region violin plot, I would like to create a model for predicting the average temperature increase by region as well.

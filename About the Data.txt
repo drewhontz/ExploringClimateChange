@@ -1,0 +1,4 @@
+The dataset I used came from Kaggle.com.
+
+The dataset and more detail can be found here: https://www.kaggle.com/berkeleyearth/climate-change-earth-surface-temperature-data
+
